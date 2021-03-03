@@ -64,7 +64,11 @@ bool redraw = true;
 #define LONG_PRESS_DURATION 1000
 EasyButton button(COLOR_BUTTON_PIN);
 
+// state of leds for each letter
 bool characters[NUM_PIXELS] { false };
+
+// no fade out at start & color change
+bool doFadeOut { false };
 
 
 // change color and force redraw
@@ -76,6 +80,7 @@ void changeColor() {
 
     EEPROM.write(EEPROM_ADDR, chosenColor);
 
+    doFadeOut = false;
     redraw = true;
 }
 
@@ -205,7 +210,7 @@ void fadeOut()
     {
         Serial.print("FADEOUT "); Serial.println(brightness);
         show(brightness);
-        delay(5); // milliseconds
+        delay(15); // milliseconds
     }
 }
 
@@ -215,7 +220,7 @@ void fadeIn()
     {
         Serial.print("FADEIN "); Serial.println(brightness);
         show(brightness);
-        delay(5); // milliseconds
+        delay(15); // milliseconds
     }
 }
 
@@ -267,7 +272,13 @@ void loop() {
 
     if (redraw) {
         Serial.println("Redrawing...");
-        fadeOut();
+        if (doFadeOut)
+        {
+            fadeOut();
+        }
+        else {
+            doFadeOut = true;
+        }
         writeTime(currentHour, currentMinute);
         show();
         fadeIn();
