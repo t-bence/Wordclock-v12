@@ -16,211 +16,265 @@ Wordclock source code v12
 
 */
 
-// using Rinky-Dinky electronics code by Hanning Karlsen
+// should it use std::bitmask instead of the bool array?
 
-#include <Arduino.h>
 #include <Wire.h>
+#include <EasyButton.h>
+#include <EEPROM.h>
+#include <Adafruit_NeoPixel.h>
 #include <DS3231.h>
 #include <TimeLib.h>        // http://www.arduino.cc/playground/Code/Time
 #include <Timezone.h>       // https://github.com/JChristensen/Timezone
-#include "Adafruit_NeoPixel.h"
-#include "constants.h"
 
+// include the words
+#include <WordclockWords.h>
+#include <Constants.h>
 
-// egyéni beállítások
-#define DEBUG 1 // legyen-e debug
+#define LAYOUT RIGHT_TO_LEFT
 #define LANGUAGE HUNGARIAN
-#define TEXT_DIRECTION LEFT_TO_RIGHT
 
-const byte LED_PIN {12};
-const byte COLOR_BUTTON_PIN {2};
-const bool ANIMATE {false};
+TimeChangeRule *tcr;        //pointer to the time change rule, use to get TZ abbrev
+time_t utc, local;
 
-// predefine redraw function
-void colorButtonPressed();
+// init RTC
+DS3231 rtc(SDA, SCL);
+Time t;
 
-const byte NUM_PIXELS {110};
-const byte BRIGHTNESS {255};
+// neopixel setup
+#define PIN               12
+#define NUM_PIXELS         110
 
-class Wordclock {
-    private: // default anyways
-        bool animate_;
-        int hour_{ -1 };
-        int min_{ -1 };
-        DS3231 rtc_{ SDA, SCL };
+Adafruit_NeoPixel pixels = Adafruit_NeoPixel(NUM_PIXELS, PIN, NEO_GRB + NEO_KHZ800);
 
-        volatile unsigned long colorLastPressed_ {0};
-        const unsigned long buttonPeriod_ {400};
-        volatile byte colorIndex_ {0};
+int currentHour = 0;
+int currentMinute = 0;
+int previousMinute = 99; // init to other value
 
-        Adafruit_NeoPixel pixels_;
+// colors
+#define COLOR_BUTTON_PIN   2   // to adjust the color
+byte chosenColor = 12; // the color currently stored
 
-        // set up rules for changing time
-        //Daylight time = UTC + 2 hours
-        TimeChangeRule myDST_{ "CEST", Last, Sun, Mar, 2, 120 };
-        //Standard time = UTC + 1 hours
-        TimeChangeRule mySTD_{ "CET", Last, Sun, Oct, 3, 60 };
-        Timezone hunTZ_{ myDST_, mySTD_ };
+//Set the color globally
+uint32_t colorOut = colors[chosenColor];
 
-        void show(byte data[])
-        {
-            for (int i = 0; i <= data[1]; i++) {
-                pixels_.setPixelColor(data[0] + i, colors[colorIndex_]);
-            }
-        }
+const int EEPROM_ADDR = 0;
 
-    public:
-        Wordclock(byte ledPin, byte colorButtonPin, bool animate)
-        {
-            animate_ = animate;
-            pixels_ = Adafruit_NeoPixel(NUM_PIXELS, ledPin,
-                                        NEO_GRB + NEO_KHZ800);
-            pixels_.begin();
-            pixels_.setBrightness(BRIGHTNESS);
-            pixels_.clear();
+// whether the screen neds to be redrawn
+bool redraw = true;
+#define LONG_PRESS_DURATION 1000
+EasyButton button(COLOR_BUTTON_PIN);
 
-            // set up color change interrupt
-            pinMode(colorButtonPin, INPUT_PULLUP);
-            attachInterrupt(digitalPinToInterrupt(colorButtonPin),
-                colorButtonPressed, RISING);
+bool characters[NUM_PIXELS] { false };
 
-            rtc_.begin();
-            update();
 
-        }
+// change color and force redraw
+void changeColor() {
 
-        // update time
-        bool update()
-        {
-            time_t utc = (time_t) rtc_.getUnixTime(rtc_.getTime());
-            time_t local = hunTZ_.toLocal(utc);
+    chosenColor++;
+    if (chosenColor >= colorsDefined) { chosenColor = 0; }
+    colorOut = colors[chosenColor];
 
-            bool redraw {false};
+    EEPROM.write(EEPROM_ADDR, chosenColor);
 
-            int currHour = hour(local);
-            int currMin = minute(local);
-            // check if time has changed by five minutes
-            // if true, set changed_ to true
-            if ((currHour != hour_) || (abs(currMin - min_) >= 5)) // if time has changed by five minutes
-            {
-                redraw = true;
-                if (animate_)
-                {
-                // do animation
-                }
-                print();
-            }
-            else {
-                redraw = false;
-            }
-            hour_ = currHour;
-            min_ = currHour;
-
-            return redraw;
-        }
-
-        void changeColor()
-        {
-            unsigned long now = millis();
-            // second case can happen when millis overflows
-            if ((now - colorLastPressed_ > buttonPeriod_) || (now < colorLastPressed_)) {
-                if (colorIndex_ >= colorsDefined)
-                {
-                    colorIndex_ = 0;
-                }
-                else {
-                    colorIndex_++;
-                }
-                colorLastPressed_ = now;
-                print();
-            }
-        }
-
-        void print()
-        {
-            // actually draw on the screen and things
-            // this will be called on color change, too
-            // use prev time stored in the object
-            // also color
-            // hour_, min_, colorIndex_
-
-            pixels_.clear();
-
-            int showHour = hour_;
-            # if LANGUAGE == HUNGARIAN
-
-                // Hungarian version
-                if (min_ < 5)       { show(MOST); show(ORA); show(VAN); }
-                else if (min_ < 10) { show(ORA); show(MULT); show(OT_MULT); show(PERCCEL); }
-                else if (min_ < 15) { show(ORA); show(MULT); show(TIZ_MULT); show(PERCCEL); }
-                else if (min_ < 20) { show(MOST); show(NEGYED); show(VAN); }
-                else if (min_ < 25) { show(NEGYED); show(MULT); show(OT_MULT); show(PERCCEL); }
-                else if (min_ < 30) { show(OT_MULVA); show(PERC); show(MULVA); show(FEL); }
-                else if (min_ < 35) { show(MOST); show(FEL); show(VAN); }
-                else if (min_ < 40) { show(FEL); show(MULT); show(OT_MULT); show(PERCCEL); }
-                else if (min_ < 45) { show(FEL); show(MULT); show(TIZ_MULT); show(PERCCEL); }
-                else if (min_ < 50) { show(MOST); show(HAROMNEGYED); show(VAN); }
-                else if (min_ < 55) { show(TIZ_MULVA); show(PERC); show(MULVA); show(ORA); }
-                else { show(OT_MULVA); show(PERC); show(MULVA); show(ORA); }
-
-                // show next hour eg: 5:15 -> "negyed hat"
-                if (min_ >= 15) { showHour++; }
-
-            # else // English
-                show(IT); show(IS);
-
-                if (min_ < 5) { show(OCLOCK); }
-                else if (min_ < 10) { show(FIVE_MIN); show(PAST); }
-                else if (min_ < 15) { show(TEN_MIN); show(PAST); }
-                else if (min_ < 20) { show(QUARTER); show(PAST); }
-                else if (min_ < 25) { show(TWENTY); show(PAST); }
-                else if (min_ < 30) { show(TWENTY); show(FIVE_MIN); show(PAST); }
-                else if (min_ < 35) { show(HALF); show(PAST); }
-                else if (min_ < 40) { show(TWENTY); show(FIVE_MIN); show(TO); }
-                else if (min_ < 45) { show(TWENTY); show(TO); }
-                else if (min_ < 50) { show(QUARTER); show(TO); }
-                else if (min_ < 55) { show(TEN_MIN); show(TO); }
-                else { show(FIVE_MIN); show(TO); }
-
-                if (min_ >= 35) { showHour ++; }
-            # endif
-            
-            // csak 12 orat jelzunk, a nulla is 12
-            if (showHour == 0) { showHour = 12; }
-            else if (showHour > 12) { showHour -= 12; }
-
-            show(HOURS[hour_ - 1]);
-
-            # if LANGUAGE == HUNGARIAN
-            // in the Hungarian version, TIZEN+EGY is built from two words
-            if (hour_ == 11) { show(HOURS[0]); }
-            # endif
-
-            pixels_.show();
-        }
-
-};
-
-Wordclock wordclock = Wordclock(LED_PIN, COLOR_BUTTON_PIN, ANIMATE);
-
-void colorButtonPressed() { wordclock.changeColor(); }
-
-void setup()
-{
-    Serial.begin(115200);
-    Serial.println("Starting up");
-
-    Wire.begin();
-    Serial.println("Wire has begun");
-    Serial.println("RTC has begun");
-
+    redraw = true;
 }
 
-void loop()
+void show()
 {
-    if (wordclock.update())
+    for (uint8_t i = 0; i < NUM_PIXELS; i++)
     {
-        wordclock.print();
+        if (characters[i])
+        {
+            pixels.setPixelColor(i, colorOut);
+        }
+        else
+        {
+            pixels.setPixelColor(i, 0, 0, 0);
+        }
     }
+    pixels.show();
+}
+
+// write everything with a shade color 0-255
+void show(uint8_t intensity)
+{
+    float ratio = static_cast<float>(intensity) / 255;
+    uint8_t red = colorOut >> 16;
+    uint8_t green = (colorOut & (0xFF << 8)) >> 8;
+    uint8_t blue = colorOut & 0xFF;
+
+    //Serial.println();
+    //Serial.print(red); Serial.print(" "); Serial.print(green);
+    //Serial.print(" "); Serial.println(blue);
+
+    uint8_t r = static_cast<uint8_t>(ratio * red);
+    uint8_t g = static_cast<uint8_t>(ratio * green);
+    uint8_t b = static_cast<uint8_t>(ratio * blue);
+
+    //Serial.print(r); Serial.print(" "); Serial.print(g);
+    //Serial.print(" "); Serial.println(b);
+
+    for (uint8_t i = 0; i < NUM_PIXELS; i++)
+    {
+        if (characters[i])
+        {
+            pixels.setPixelColor(i, r, g, b);
+        }
+        else
+        {
+            pixels.setPixelColor(i, 0, 0, 0);
+        }
+    }
+    pixels.show();
+}
+
+void write(byte data[]) {
+    byte start = data[0];
+    byte len = data[1];
+
+    for (int i = 0; i <= len; i++)
+    {
+        characters[start + i] = true;
+    }
+}
+
+void clear()
+{
+    for (uint8_t i = 0; i < NUM_PIXELS; i++)
+    {
+        characters[i] = false;
+    }
+    show();
+}
+
+void writeTime(int hour, int min)
+{
+    clear();
+    # if LANGUAGE == HUNGARIAN
+        // Hungarian version
+        if (min < 5)       { write(MOST); write(ORA); write(VAN); }
+        else if (min < 10) { write(ORA); write(MULT); write(OT_MULT); write(PERCCEL); }
+        else if (min < 15) { write(ORA); write(MULT); write(TIZ_MULT); write(PERCCEL); }
+        else if (min < 20) { write(MOST); write(NEGYED); write(VAN); }
+        else if (min < 25) { write(NEGYED); write(MULT); write(OT_MULT); write(PERCCEL); }
+        else if (min < 30) { write(OT_MULVA); write(PERC); write(MULVA); write(FEL); }
+        else if (min < 35) { write(MOST); write(FEL); write(VAN); }
+        else if (min < 40) { write(FEL); write(MULT); write(OT_MULT); write(PERCCEL); }
+        else if (min < 45) { write(FEL); write(MULT); write(TIZ_MULT); write(PERCCEL); }
+        else if (min < 50) { write(MOST); write(HAROMNEGYED); write(VAN); }
+        else if (min < 55) { write(TIZ_MULVA); write(PERC); write(MULVA); write(ORA); }
+        else { write(OT_MULVA); write(PERC); write(MULVA); write(ORA); }
+
+        // show next hour eg: 5:15 -> "negyed hat"
+        if (min >= 15) { hour++; }
+
+    # else // English
+        write(IT); write(IS);
+
+        if (min < 5) { write(OCLOCK); }
+        else if (min < 10) { write(FIVE_MIN); write(PAST); }
+        else if (min < 15) { write(TEN_MIN); write(PAST); }
+        else if (min < 20) { write(QUARTER); write(PAST); }
+        else if (min < 25) { write(TWENTY); write(PAST); }
+        else if (min < 30) { write(TWENTY); write(FIVE_MIN); write(PAST); }
+        else if (min < 35) { write(HALF); write(PAST); }
+        else if (min < 40) { write(TWENTY); write(FIVE_MIN); write(TO); }
+        else if (min < 45) { write(TWENTY); write(TO); }
+        else if (min < 50) { write(QUARTER); write(TO); }
+        else if (min < 55) { write(TEN_MIN); write(TO); }
+        else { write(FIVE_MIN); write(TO); }
+
+        if (min >= 35) { showHour ++; }
+    # endif
     
+    // csak 12 orat jelzunk, a nulla is 12
+    if (hour == 0) { hour = 12; }
+    else if (hour > 12) { hour -= 12; }
+
+    write(HOURS[hour - 1]);
+
+    # if LANGUAGE == HUNGARIAN
+    // in the Hungarian version, TIZEN+EGY is built from two words
+    if (hour == 11) { write(HOURS[0]); }
+    # endif
+}
+
+void fadeOut()
+{
+    for (uint8_t brightness = 255; brightness > 0; --brightness)
+    {
+        Serial.print("FADEOUT "); Serial.println(brightness);
+        show(brightness);
+        delay(5); // milliseconds
+    }
+}
+
+void fadeIn()
+{
+    for (uint8_t brightness = 0; brightness < 255; ++brightness)
+    {
+        Serial.print("FADEIN "); Serial.println(brightness);
+        show(brightness);
+        delay(5); // milliseconds
+    }
+}
+
+bool hasTimeChanged(const int currentMinute, const int previousMinute)
+{
+    // if the clock should be redrawn
+    // later redraw should only be issued every five minutes
+    return currentMinute != previousMinute;
+}
+
+void setup() {
+    Serial.begin(9600); // debugging only
+    Serial.println("Starting up...");
+    Wire.begin();
+    Serial.println("Wire has begun");
+
+    rtc.begin();
+    // Serial.println("RTC has begun");
+
+    // button
+    button.begin();
+    button.onPressedFor(LONG_PRESS_DURATION, changeColor);
+
+    // read from EEPROM.
+    chosenColor = EEPROM.read(EEPROM_ADDR);
+    if (chosenColor >= colorsDefined) {
+        chosenColor = 0;
+    }
+    colorOut = colors[chosenColor];
+
+    pixels.begin();
+    pixels.setBrightness(255); // 0-255
+    pixels.clear();
+
+    pixels.show();  // reset to no colors
+    Serial.println("NeoPixel has begun");
+
+    redraw = true; // write time immediately
+}
+
+void loop() {
+    utc = (time_t) rtc.getUnixTime(rtc.getTime());
+    // printTime(utc, "UTC");
+    local = hunTZ.toLocal(utc, &tcr);
+    // printTime(local, tcr -> abbrev);
+    currentHour = hour(local);
+    currentMinute = minute(local);
+    redraw |= hasTimeChanged(currentMinute, previousMinute);
+
+    if (redraw) {
+        Serial.println("Redrawing...");
+        fadeOut();
+        writeTime(currentHour, currentMinute);
+        show();
+        fadeIn();
+
+        previousMinute = currentMinute;
+        redraw = false;
+    }
+    button.read();
+
 }
