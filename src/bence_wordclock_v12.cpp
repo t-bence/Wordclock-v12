@@ -227,8 +227,8 @@ void fadeIn()
 bool hasTimeChanged(const int currentMinute, const int previousMinute)
 {
     // if the clock should be redrawn
-    // later redraw should only be issued every five minutes
-    return currentMinute != previousMinute;
+    // should only be issued every five minutes
+    return (currentMinute / 5) != (previousMinute / 5);
 }
 
 void setup() {
@@ -280,7 +280,6 @@ void loop() {
             doFadeOut = true;
         }
         writeTime(currentHour, currentMinute);
-        show();
         fadeIn();
 
         previousMinute = currentMinute;
