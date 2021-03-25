@@ -74,6 +74,14 @@ uint8_t HOURS[12][2] {
   {55, 4},
   {55, 9}
 };
+
+// data for birthday message
+
+// number of letters in message
+#define NUM_BIRTHDAY_LETTERS 16
+// BOLDOG SZÜLINAPOT - letter IDs
+uint8_t BIRTHDAY_LETTERS[NUM_BIRTHDAY_LETTERS] = {15, 19, 21, 22, 29, 34, 51, 57, 65, 66,
+  73, 87, 88, 99, 101, 104};
 #endif
 
 
